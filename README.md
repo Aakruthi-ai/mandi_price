@@ -3,6 +3,7 @@
 An AI-powered web application that predicts **modal mandi prices** for agricultural commodities and helps farmers/traders **negotiate better prices** using machine learning, multilingual support, and voice input.
 
 Built using **Python, Scikit-learn, Gradio**, and deployable on **Hugging Face Spaces**.
+It includes dropdown menu of options for state, district, market,commodity,variety,grade from which user have to choose and can get its predicted price. It also includes a negotiation voice input for local vendors to know its negotiation price. 
 
 ---
 
@@ -12,7 +13,7 @@ Built using **Python, Scikit-learn, Gradio**, and deployable on **Hugging Face S
   - Predicts *Modal Price* of commodities using a trained Random Forest model
 - 🌍 **Multilingual Support**
   - UI and dropdowns dynamically change based on selected language
-  - Supports English and Indian regional languages (extensible)
+  - Supports English, Hindi and Kannada (extensible)
 - 🎙️ **Voice-driven Negotiation**
   - Users can speak their offered price
   - App evaluates and responds with negotiation advice
@@ -29,5 +30,4 @@ Built using **Python, Scikit-learn, Gradio**, and deployable on **Hugging Face S
 
 ---
 
-## 🏗️ Project Structure
 
