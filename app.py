@@ -2,17 +2,9 @@ import gradio as gr
 import pandas as pd
 import numpy as np
 import pickle
-import speech_recognition as sr
-from gtts import gTTS
-import tempfile
 import re
-import joblib
-import joblib
-
-model = joblib.load("price_model.pkl")
-label_encoders = joblib.load("label_encoders.pkl")
-
-
+import speech_recognition as sr
+from word2number import w2n
 
 # ===============================
 # LOAD MODEL & ENCODERS
@@ -23,152 +15,166 @@ with open("price_model.pkl", "rb") as f:
 with open("label_encoders.pkl", "rb") as f:
     label_encoders = pickle.load(f)
 
-# ===============================
-# LOAD DATA FOR DROPDOWNS
-# ===============================
-df = pd.read_csv("commodity_price.csv")
-df.columns = df.columns.str.strip()
+FEATURES = ['State', 'District', 'Market', 'Commodity', 'Variety', 'Grade']
 
-df.rename(columns={
-    "Modal_x0020_Price": "Modal_Price",
-    "Min_x0020_Price": "Min_Price",
-    "Max_x0020_Price": "Max_Price"
-}, inplace=True)
+# ===============================
+# INDIAN NUMBER MAP (Hindi + Kannada)
+# ===============================
+INDIAN_NUMBER_MAP = {
+    # Hindi
+    "ek": 1, "do": 2, "teen": 3, "char": 4,
+    "paanch": 5, "hazaar": 1000, "hazar": 1000,
 
-states = sorted(df["State"].dropna().unique())
-districts = sorted(df["District"].dropna().unique())
-markets = sorted(df["Market"].dropna().unique())
-commodities = sorted(df["Commodity"].dropna().unique())
-varieties = sorted(df["Variety"].dropna().unique())
-grades = sorted(df["Grade"].dropna().unique())
+    # Kannada
+    "ondu": 1, "eradu": 2, "mooru": 3,
+    "nalku": 4, "aidu": 5, "saavira": 1000
+}
+
+# ===============================
+# PRICE EXTRACTION (ROBUST)
+# ===============================
+def extract_price(text):
+    text = text.lower()
+
+    digits = re.findall(r"\d+", text)
+    if digits:
+        return int(digits[0])
+
+    try:
+        return w2n.word_to_num(text)
+    except:
+        pass
+
+    total = 0
+    tokens = text.split()
+    for i, word in enumerate(tokens):
+        if word in INDIAN_NUMBER_MAP:
+            value = INDIAN_NUMBER_MAP[word]
+            if value < 10 and i + 1 < len(tokens):
+                nxt = tokens[i + 1]
+                if nxt in INDIAN_NUMBER_MAP and INDIAN_NUMBER_MAP[nxt] >= 1000:
+                    total += value * INDIAN_NUMBER_MAP[nxt]
+            else:
+                total += value
+
+    return total if total > 0 else None
+
+# ===============================
+# VOICE TO TEXT
+# ===============================
+def speech_to_text(audio):
+    if audio is None:
+        return ""
+
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(audio) as source:
+        audio_data = recognizer.record(source)
+
+    try:
+        return recognizer.recognize_google(audio_data)
+    except:
+        return ""
 
 # ===============================
 # PRICE PREDICTION
 # ===============================
 def predict_price(state, district, market, commodity, variety, grade):
-    data = {
-        "State": state,
-        "District": district,
-        "Market": market,
-        "Commodity": commodity,
-        "Variety": variety,
-        "Grade": grade
+    input_data = {
+        'State': state,
+        'District': district,
+        'Market': market,
+        'Commodity': commodity,
+        'Variety': variety,
+        'Grade': grade
     }
 
-    df_input = pd.DataFrame([data])
-
-    for col in df_input.columns:
+    encoded = []
+    for col in FEATURES:
         le = label_encoders[col]
-        if df_input[col][0] not in le.classes_:
-            df_input[col][0] = le.classes_[0]
-        df_input[col] = le.transform(df_input[col])
+        if input_data[col] not in le.classes_:
+            return None
+        encoded.append(le.transform([input_data[col]])[0])
 
-    price = model.predict(df_input)[0]
-    confidence = min(95, 60 + np.random.rand() * 25)
-
-    return round(price, 2), f"{confidence:.1f}%"
-
-# ===============================
-# SPEECH → TEXT
-# ===============================
-def speech_to_text(audio, language):
-    recognizer = sr.Recognizer()
-
-    lang_map = {
-        "English": "en-IN",
-        "Hindi": "hi-IN",
-        "Kannada": "kn-IN"
-    }
-
-    with sr.AudioFile(audio) as source:
-        audio_data = recognizer.record(source)
-
-    try:
-        return recognizer.recognize_google(
-            audio_data, language=lang_map[language]
-        )
-    except:
-        return ""
+    X = np.array(encoded).reshape(1, -1)
+    return int(model.predict(X)[0])
 
 # ===============================
 # NEGOTIATION LOGIC
 # ===============================
-def negotiate(audio, predicted_price, language):
-    text = speech_to_text(audio, language)
+def negotiate(audio, state, district, market, commodity, variety, grade):
+    predicted_price = predict_price(
+        state, district, market, commodity, variety, grade
+    )
 
-    if text == "":
-        return "Could not understand your voice.", None
+    if predicted_price is None:
+        return "❌ Invalid input selection"
 
-    numbers = re.findall(r"\d+", text)
+    spoken_text = speech_to_text(audio)
+    offered = extract_price(spoken_text)
 
-    if not numbers:
-        response = "Please say your offered price clearly."
-        final_price = predicted_price
-    else:
-        offer = int(numbers[0])
+    if offered is None:
+        return (
+            "🎤 I couldn’t catch the price.\n"
+            "Please say like:\n"
+            "• I can sell for 2000\n"
+            "• Do hazaar\n"
+            "• Eradu saavira"
+        )
 
-        if offer >= predicted_price * 0.95:
-            response = "Deal accepted. This is a fair price."
-            final_price = offer
-        elif offer >= predicted_price * 0.85:
-            counter = int((offer + predicted_price) / 2)
-            response = f"My counter offer is {counter} rupees."
-            final_price = counter
-        else:
-            response = "Offer too low. Price remains unchanged."
-            final_price = predicted_price
+    confidence = max(0, 100 - abs(predicted_price - offered) / predicted_price * 100)
 
-    tts_lang = {"English": "en", "Hindi": "hi", "Kannada": "kn"}[language]
-    tts = gTTS(response, lang=tts_lang)
+    status = "✅ Fair Offer" if offered >= predicted_price * 0.95 else "⚠️ Low Offer"
 
-    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tts.save(temp_audio.name)
+    return (
+        f"🗣 You said: {spoken_text}\n\n"
+        f"💰 Your Offer: ₹{offered}\n"
+        f"📊 Predicted Mandi Price: ₹{predicted_price}\n"
+        f"{status}\n"
+        f"🎯 Confidence Score: {round(confidence, 1)}%"
+    )
 
-    return response, temp_audio.name
+# ===============================
+# DROPDOWN VALUES
+# ===============================
+dropdowns = {
+    col: sorted(label_encoders[col].classes_.tolist())
+    for col in FEATURES
+}
 
 # ===============================
 # GRADIO UI
 # ===============================
-with gr.Blocks(title="Multilingual Mandi") as app:
-
-    gr.Markdown("## 🌾 Multilingual Mandi – AI Price & Voice Negotiation")
-
-    language = gr.Radio(
-        ["English", "Hindi", "Kannada"],
-        value="English",
-        label="Spoken Language"
+with gr.Blocks(title="Multilingual Mandi Negotiation") as demo:
+    gr.Markdown("## 🏪 Multilingual Mandi – Voice Negotiation App")
+    gr.Markdown(
+        "🎤 Speak naturally in **English / Hindi / Kannada**\n\n"
+        "**Examples:**\n"
+        "- I can sell for 2000\n"
+        "- Do hazaar milega?\n"
+        "- Eradu saavira kodtira?"
     )
 
-    state = gr.Dropdown(states, label="State")
-    district = gr.Dropdown(districts, label="District")
-    market = gr.Dropdown(markets, label="Market")
-    commodity = gr.Dropdown(commodities, label="Commodity")
-    variety = gr.Dropdown(varieties, label="Variety")
-    grade = gr.Dropdown(grades, label="Grade")
+    with gr.Row():
+        state = gr.Dropdown(dropdowns['State'], label="State")
+        district = gr.Dropdown(dropdowns['District'], label="District")
 
-    predict_btn = gr.Button("Predict Price")
+    with gr.Row():
+        market = gr.Dropdown(dropdowns['Market'], label="Market")
+        commodity = gr.Dropdown(dropdowns['Commodity'], label="Commodity")
 
-    price_out = gr.Number(label="Predicted Price (₹)")
-    conf_out = gr.Textbox(label="Confidence Score")
+    with gr.Row():
+        variety = gr.Dropdown(dropdowns['Variety'], label="Variety")
+        grade = gr.Dropdown(dropdowns['Grade'], label="Grade")
 
-    predict_btn.click(
-        predict_price,
-        inputs=[state, district, market, commodity, variety, grade],
-        outputs=[price_out, conf_out]
-    )
+    audio = gr.Audio(type="filepath", label="🎤 Speak your offer")
 
-    gr.Markdown("### 🎙️ Speak your offer")
+    output = gr.Textbox(label="Negotiation Result", lines=8)
 
-    voice_input = gr.Audio(type="filepath")
-    negotiate_btn = gr.Button("Negotiate")
-
-    negotiation_text = gr.Textbox(label="Negotiation Result")
-    negotiation_voice = gr.Audio(label="Voice Response")
-
-    negotiate_btn.click(
+    btn = gr.Button("Negotiate")
+    btn.click(
         negotiate,
-        inputs=[voice_input, price_out, language],
-        outputs=[negotiation_text, negotiation_voice]
+        inputs=[audio, state, district, market, commodity, variety, grade],
+        outputs=output
     )
 
-app.launch(share=True)
+demo.launch(share=True)
