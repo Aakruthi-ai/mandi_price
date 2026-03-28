@@ -7,7 +7,7 @@ import speech_recognition as sr
 from word2number import w2n
 import tempfile
 import os
-from audio_recorder_streamlit import audio_recorder
+
 
 # ===============================
 # PAGE CONFIG
@@ -446,20 +446,9 @@ with right_col:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Audio recorder
-    try:
-        audio_bytes = audio_recorder(
-            text="Click to record your offer",
-            recording_color="#E8C87A",
-            neutral_color="#7A9E6B",
-            icon_name="microphone",
-            icon_size="2x",
-            pause_threshold=2.5,
-            key="audio_rec"
-        )
-    except Exception:
-        audio_bytes = None
-        st.info("Install `audio-recorder-streamlit` for voice input: `pip install audio-recorder-streamlit`")
+    # Built-in Streamlit audio input (no extra package needed, requires Streamlit ≥ 1.31)
+    audio_input = st.audio_input("🎤 Record your offer price", key="audio_rec")
+    audio_bytes = audio_input.read() if audio_input is not None else None
 
     # Manual fallback
     manual_price = st.text_input(
