@@ -1,7 +1,22 @@
-gradio
-pandas
-numpy
-scikit-learn
-speechrecognition
-pydub
-word2number
+# Mandi Mitra — RAG + Grok LLM
+# ─────────────────────────────
+streamlit>=1.31.0
+
+# LLM + Embeddings (Grok via OpenAI-compatible SDK)
+openai>=1.30.0
+
+# Vector store
+faiss-cpu>=1.7.4
+
+# Data
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+
+# Voice input
+SpeechRecognition>=3.10.0
+word2number>=1.1
+
+# Optional: for faster local embeddings instead of API
+# sentence-transformers>=2.7.0
+
