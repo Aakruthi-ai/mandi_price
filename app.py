@@ -1,214 +1,629 @@
 """
-rag_engine.py  — Mandi Mitra RAG engine
-════════════════════════════════════════
-Embeddings : sentence-transformers (FREE, local, no API credits)
-LLM        : Grok-3-mini via xAI (only for reasoning/chat)
-Vector DB  : FAISS (local)
-Live data  : data.gov.in commodity API (free)
+app.py — Mandi Mitra 🌾
+Streamlit frontend: RAG + Grok LLM price intelligence
 """
 
-from __future__ import annotations
-import os, json, time, pickle, requests
-import numpy as np
-import faiss
+import os, pickle
+import streamlit as st
 from pathlib import Path
-from typing import Optional
-from openai import OpenAI
 
-# ── Lazy-load embedder so Streamlit startup stays fast ────────
-_embedder = None
+# ── Page config (MUST be first Streamlit call) ────────────────
+st.set_page_config(
+    page_title="Mandi Mitra",
+    page_icon="🌾",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-def get_embedder():
-    global _embedder
-    if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    return _embedder
+# ══════════════════════════════════════════════════════════════
+# TRANSLATIONS
+# ══════════════════════════════════════════════════════════════
+T = {
+    "English": {
+        "app_title": "Mandi Mitra",
+        "app_sub": "AI-Powered Agricultural Price Intelligence",
+        "lang_label": "Language / भाषा / ಭಾಷೆ",
+        "tab_predict": "📈 Price Intelligence",
+        "tab_negotiate": "🤝 Negotiation Assistant",
+        "tab_about": "ℹ️ About",
+        "state": "State", "district": "District", "market": "Market",
+        "commodity": "Commodity", "variety": "Variety", "grade": "Grade",
+        "predict_btn": "🔍 Get Price Intelligence",
+        "offer_label": "Your Offered Price (₹ per quintal)",
+        "offer_placeholder": "e.g. 2500",
+        "voice_label": "Or speak your offered price:",
+        "evaluate_btn": "⚖️ Evaluate My Offer",
+        "live_badge": "🟢 Live data included",
+        "no_index": "⚠️ RAG index not found. Please run ingest.py first.",
+        "no_key": "⚠️ XAI_API_KEY not set in Streamlit secrets.",
+        "spinner_predict": "Consulting market data…",
+        "spinner_eval": "Evaluating your offer…",
+        "verdict_fair": "✅ Fair Price",
+        "verdict_low": "❌ Too Low",
+        "verdict_high": "🔺 Above Market",
+        "verdict_unknown": "❓ Unknown",
+        "fair_price": "Estimated Fair Price",
+        "confidence": "Confidence",
+        "advice": "Advice",
+        "select_hint": "Select all fields to begin",
+        "about_text": """
+**Mandi Mitra** helps Indian farmers and traders make smarter decisions at the mandi.
 
-# ── Grok client (xAI) — for LLM only ─────────────────────────
-def get_grok_client() -> OpenAI:
-    return OpenAI(
-        api_key  = os.environ.get("XAI_API_KEY", ""),
-        base_url = "https://api.x.ai/v1",
+**How it works:**
+- Historical AGMARKNET data is embedded into a FAISS vector index
+- Live prices are fetched from data.gov.in in real time
+- Grok-3-mini LLM synthesises both to give you actionable advice
+
+**Built with:** Streamlit · FAISS · sentence-transformers · xAI Grok · data.gov.in
+
+**Languages:** English · हिन्दी · ಕನ್ನಡ
+        """,
+    },
+    "हिन्दी": {
+        "app_title": "मंडी मित्र",
+        "app_sub": "AI-संचालित कृषि मूल्य सहायक",
+        "lang_label": "Language / भाषा / ಭಾಷೆ",
+        "tab_predict": "📈 मूल्य जानकारी",
+        "tab_negotiate": "🤝 मोल-भाव सहायक",
+        "tab_about": "ℹ️ परिचय",
+        "state": "राज्य", "district": "जिला", "market": "मंडी",
+        "commodity": "फसल", "variety": "किस्म", "grade": "ग्रेड",
+        "predict_btn": "🔍 मूल्य जानें",
+        "offer_label": "आपका प्रस्तावित मूल्य (₹ प्रति क्विंटल)",
+        "offer_placeholder": "जैसे 2500",
+        "voice_label": "या बोलकर बताएं:",
+        "evaluate_btn": "⚖️ मूल्य जाँचें",
+        "live_badge": "🟢 लाइव डेटा शामिल",
+        "no_index": "⚠️ RAG इंडेक्स नहीं मिला। पहले ingest.py चलाएं।",
+        "no_key": "⚠️ XAI_API_KEY सेट नहीं है।",
+        "spinner_predict": "बाज़ार डेटा देख रहे हैं…",
+        "spinner_eval": "आपका मूल्य जाँच रहे हैं…",
+        "verdict_fair": "✅ उचित मूल्य",
+        "verdict_low": "❌ बहुत कम",
+        "verdict_high": "🔺 बाज़ार से ऊपर",
+        "verdict_unknown": "❓ अज्ञात",
+        "fair_price": "अनुमानित उचित मूल्य",
+        "confidence": "विश्वास स्तर",
+        "advice": "सलाह",
+        "select_hint": "शुरू करने के लिए सभी विकल्प चुनें",
+        "about_text": """
+**मंडी मित्र** भारतीय किसानों और व्यापारियों को मंडी में बेहतर निर्णय लेने में मदद करता है।
+
+**कैसे काम करता है:**
+- AGMARKNET के ऐतिहासिक डेटा को FAISS वेक्टर इंडेक्स में संग्रहीत किया जाता है
+- data.gov.in से लाइव कीमतें प्राप्त की जाती हैं
+- Grok-3-mini LLM दोनों को मिलाकर सलाह देता है
+        """,
+    },
+    "ಕನ್ನಡ": {
+        "app_title": "ಮಂಡಿ ಮಿತ್ರ",
+        "app_sub": "AI ಆಧಾರಿತ ಕೃಷಿ ಬೆಲೆ ಸಹಾಯಕ",
+        "lang_label": "Language / भाषा / ಭಾಷೆ",
+        "tab_predict": "📈 ಬೆಲೆ ಮಾಹಿತಿ",
+        "tab_negotiate": "🤝 ಚೌಕಾಸಿ ಸಹಾಯಕ",
+        "tab_about": "ℹ️ ಪರಿಚಯ",
+        "state": "ರಾಜ್ಯ", "district": "ಜಿಲ್ಲೆ", "market": "ಮಾರುಕಟ್ಟೆ",
+        "commodity": "ಬೆಳೆ", "variety": "ತಳಿ", "grade": "ದರ್ಜೆ",
+        "predict_btn": "🔍 ಬೆಲೆ ತಿಳಿಯಿರಿ",
+        "offer_label": "ನಿಮ್ಮ ಪ್ರಸ್ತಾಪಿತ ಬೆಲೆ (₹ ಪ್ರತಿ ಕ್ವಿಂಟಾಲ್)",
+        "offer_placeholder": "ಉದಾ. 2500",
+        "voice_label": "ಅಥವಾ ಮಾತನಾಡಿ:",
+        "evaluate_btn": "⚖️ ಬೆಲೆ ಪರಿಶೀಲಿಸಿ",
+        "live_badge": "🟢 ನೇರ ಡೇಟಾ ಸೇರಿದೆ",
+        "no_index": "⚠️ RAG ಇಂಡೆಕ್ಸ್ ಕಾಣಿಸಿಲ್ಲ। ingest.py ಮೊದಲು ಚಲಾಯಿಸಿ.",
+        "no_key": "⚠️ XAI_API_KEY ಸೆಟ್ ಆಗಿಲ್ಲ.",
+        "spinner_predict": "ಮಾರುಕಟ್ಟೆ ಡೇಟಾ ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ…",
+        "spinner_eval": "ನಿಮ್ಮ ಬೆಲೆ ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ…",
+        "verdict_fair": "✅ ಸರಿಯಾದ ಬೆಲೆ",
+        "verdict_low": "❌ ತುಂಬಾ ಕಡಿಮೆ",
+        "verdict_high": "🔺 ಮಾರುಕಟ್ಟೆಗಿಂತ ಹೆಚ್ಚು",
+        "verdict_unknown": "❓ ತಿಳಿದಿಲ್ಲ",
+        "fair_price": "ಅಂದಾಜು ನ್ಯಾಯಯುತ ಬೆಲೆ",
+        "confidence": "ವಿಶ್ವಾಸ ಮಟ್ಟ",
+        "advice": "ಸಲಹೆ",
+        "select_hint": "ಪ್ರಾರಂಭಿಸಲು ಎಲ್ಲಾ ಆಯ್ಕೆಗಳನ್ನು ಆರಿಸಿ",
+        "about_text": """
+**ಮಂಡಿ ಮಿತ್ರ** ಭಾರತೀಯ ರೈತರು ಮತ್ತು ವ್ಯಾಪಾರಿಗಳಿಗೆ ಮಂಡಿಯಲ್ಲಿ ಉತ್ತಮ ನಿರ್ಧಾರ ತೆಗೆದುಕೊಳ್ಳಲು ಸಹಾಯ ಮಾಡುತ್ತದೆ.
+        """,
+    },
+}
+
+# ══════════════════════════════════════════════════════════════
+# GLOBAL CSS
+# ══════════════════════════════════════════════════════════════
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Tiro+Devanagari+Hindi&family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+/* ── Root palette ── */
+:root {
+    --bg:        #0A1628;
+    --surface:   #0F2040;
+    --surface2:  #162952;
+    --border:    #1E3A6E;
+    --gold:      #F5A623;
+    --gold-dim:  #C4811A;
+    --green:     #2ECC71;
+    --red:       #E74C3C;
+    --blue:      #3498DB;
+    --text:      #E8EDF5;
+    --muted:     #7A90B8;
+    --accent:    #00C9A7;
+}
+
+/* ── Global reset ── */
+html, body, [data-testid="stAppViewContainer"] {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-family: 'DM Sans', sans-serif !important;
+}
+
+[data-testid="stSidebar"] {
+    background: var(--surface) !important;
+    border-right: 1px solid var(--border) !important;
+}
+
+/* ── Hero banner ── */
+.hero {
+    background: linear-gradient(135deg, #0F2040 0%, #0A1628 50%, #0D1F3C 100%);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2.5rem 3rem;
+    margin-bottom: 2rem;
+    position: relative;
+    overflow: hidden;
+}
+.hero::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 220px; height: 220px;
+    background: radial-gradient(circle, rgba(245,166,35,0.12) 0%, transparent 70%);
+    border-radius: 50%;
+}
+.hero::after {
+    content: '';
+    position: absolute;
+    bottom: -40px; left: -40px;
+    width: 160px; height: 160px;
+    background: radial-gradient(circle, rgba(0,201,167,0.10) 0%, transparent 70%);
+    border-radius: 50%;
+}
+.hero-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 3rem;
+    font-weight: 900;
+    background: linear-gradient(135deg, #F5A623, #FFD700, #F5A623);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin: 0;
+    line-height: 1.1;
+}
+.hero-sub {
+    color: var(--muted);
+    font-size: 1rem;
+    margin-top: 0.5rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+}
+.hero-emoji { font-size: 3.5rem; }
+
+/* ── Stripe ── */
+.stripe {
+    height: 4px;
+    background: linear-gradient(90deg, #F5A623, #00C9A7, #3498DB, #F5A623);
+    border-radius: 2px;
+    margin-bottom: 1.5rem;
+    background-size: 200% 100%;
+    animation: shimmer 3s linear infinite;
+}
+@keyframes shimmer {
+    0%   { background-position: 0% 0%; }
+    100% { background-position: 200% 0%; }
+}
+
+/* ── Cards ── */
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+}
+.card-gold  { border-left: 4px solid var(--gold); }
+.card-green { border-left: 4px solid var(--green); }
+.card-red   { border-left: 4px solid var(--red); }
+.card-blue  { border-left: 4px solid var(--blue); }
+
+/* ── Section header ── */
+.section-head {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.3rem;
+    color: var(--gold);
+    margin-bottom: 1rem;
+    font-weight: 700;
+}
+
+/* ── Streamlit widget overrides ── */
+[data-testid="stSelectbox"] label,
+[data-testid="stNumberInput"] label,
+[data-testid="stTextInput"] label,
+[data-testid="stRadio"] label,
+[data-testid="stAudioInput"] label {
+    color: var(--muted) !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+}
+
+div[data-baseweb="select"] > div {
+    background: var(--surface2) !important;
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+    border-radius: 10px !important;
+}
+
+[data-testid="stNumberInput"] input,
+[data-testid="stTextInput"] input {
+    background: var(--surface2) !important;
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+    border-radius: 10px !important;
+}
+
+/* Buttons */
+[data-testid="stButton"] > button {
+    background: linear-gradient(135deg, var(--gold), var(--gold-dim)) !important;
+    color: #0A1628 !important;
+    font-weight: 700 !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.65rem 2rem !important;
+    font-size: 0.95rem !important;
+    letter-spacing: 0.03em !important;
+    transition: all 0.2s !important;
+    width: 100% !important;
+}
+[data-testid="stButton"] > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 24px rgba(245,166,35,0.35) !important;
+}
+
+/* Tabs */
+[data-testid="stTabs"] [role="tablist"] {
+    background: var(--surface) !important;
+    border-radius: 12px !important;
+    padding: 4px !important;
+    border: 1px solid var(--border) !important;
+}
+[data-testid="stTabs"] [role="tab"] {
+    color: var(--muted) !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+    background: var(--gold) !important;
+    color: #0A1628 !important;
+}
+
+/* Metrics */
+[data-testid="metric-container"] {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 14px !important;
+    padding: 1rem !important;
+}
+[data-testid="stMetricValue"] {
+    color: var(--gold) !important;
+    font-family: 'Playfair Display', serif !important;
+    font-size: 2rem !important;
+}
+
+/* Progress bar */
+[data-testid="stProgress"] > div > div {
+    background: linear-gradient(90deg, var(--accent), var(--gold)) !important;
+    border-radius: 4px !important;
+}
+
+/* Expander */
+[data-testid="stExpander"] {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 12px !important;
+}
+
+/* Success / warning / error */
+[data-testid="stAlert"] {
+    border-radius: 12px !important;
+}
+
+/* Sidebar radio */
+[data-testid="stSidebar"] [data-testid="stRadio"] > div {
+    gap: 0.5rem !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════
+# SIDEBAR — Language + info
+# ══════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown('<div class="section-head">🌾 Mandi Mitra</div>', unsafe_allow_html=True)
+    st.markdown("---")
+    lang = st.radio(
+        "Language / भाषा / ಭಾಷೆ",
+        ["English", "हिन्दी", "ಕನ್ನಡ"],
+        index=0,
     )
-
-GROK_MODEL  = "grok-3-mini"
-INDEX_PATH  = "mandi_faiss.index"
-META_PATH   = "mandi_meta.pkl"
-TOP_K       = 8
-
-# ── data.gov.in live API ──────────────────────────────────────
-DATGOV_URL = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
-DATGOV_KEY = os.environ.get("DATAGOV_API_KEY",
-             "579b464db66ec23bdd000001cdd3946e44ce4aab0ddc1fb668bcf87")
+    tx = T[lang]
+    st.markdown("---")
+    st.markdown(f'<p style="color:var(--muted);font-size:0.8rem;">🔗 Data: AGMARKNET + data.gov.in<br>🤖 LLM: Grok-3-mini (xAI)<br>🗄️ Vector DB: FAISS</p>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
-# INDEX LOAD / SAVE
+# HERO
 # ══════════════════════════════════════════════════════════════
-def load_index():
-    if not Path(INDEX_PATH).exists() or not Path(META_PATH).exists():
-        return None, None, None
-    index = faiss.read_index(INDEX_PATH)
-    with open(META_PATH, "rb") as f:
+st.markdown(f"""
+<div class="hero">
+  <div style="display:flex;align-items:center;gap:1.5rem;">
+    <div class="hero-emoji">🌾</div>
+    <div>
+      <div class="hero-title">{tx['app_title']}</div>
+      <div class="hero-sub">{tx['app_sub']}</div>
+    </div>
+  </div>
+</div>
+<div class="stripe"></div>
+""", unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════
+# LOAD INDEX + CLIENT
+# ══════════════════════════════════════════════════════════════
+@st.cache_resource(show_spinner="Loading RAG index…")
+def load_resources():
+    from rag_engine import load_index, get_grok_client
+    index, metas, docs = load_index()
+    client = get_grok_client()
+    return index, metas, docs, client
+
+index, metas, docs, client = load_resources()
+
+# ══════════════════════════════════════════════════════════════
+# LOAD DROPDOWN OPTIONS FROM PICKLE
+# ══════════════════════════════════════════════════════════════
+@st.cache_data
+def get_options():
+    meta_path = Path("mandi_meta.pkl")
+    if not meta_path.exists():
+        return {}, {}, {}, {}, {}, {}
+    with open(meta_path, "rb") as f:
         store = pickle.load(f)
-    return index, store["metas"], store["docs"]
+    docs_list = store.get("docs", [])
+    # Parse docs to extract unique values
+    states = set(); districts = set(); markets = set()
+    commodities = set(); varieties = set(); grades = set()
+    for d in docs_list:
+        parts = d.split(".")
+        for p in parts:
+            p = p.strip()
+            if " in " in p:
+                try:
+                    loc = p.split(" in ")[-1]
+                    bits = [b.strip() for b in loc.split(",")]
+                    if len(bits) >= 3:
+                        markets.add(bits[0]); districts.add(bits[1]); states.add(bits[2])
+                except: pass
+    # Fallback: common Indian states if parsing yields too little
+    if len(states) < 3:
+        states = {"Karnataka","Maharashtra","Uttar Pradesh","Punjab","Rajasthan",
+                  "Madhya Pradesh","Gujarat","Andhra Pradesh","Tamil Nadu","Haryana",
+                  "West Bengal","Bihar","Telangana","Odisha","Kerala"}
+        districts = {"Bangalore","Mumbai","Lucknow","Amritsar","Jaipur","Bhopal",
+                     "Ahmedabad","Hyderabad","Chennai","Chandigarh"}
+        markets   = {"Yeshwanthpur","Vashi","Azadpur","Yelahanka","Hubli",
+                     "Mysore","Davangere","Tumkur","Shimoga","Belgaum"}
+        commodities = {"Onion","Tomato","Potato","Rice","Wheat","Maize","Soybean",
+                       "Cotton","Groundnut","Jowar","Bajra","Sugarcane","Chilli","Garlic"}
+        varieties   = {"Local","Hybrid","FAQ","Bold","Medium","Fine","Coarse","No.1","No.2","Other"}
+        grades      = {"FAQ","Grade A","Grade B","Grade C","Super","Medium","Common"}
+    return (sorted(states), sorted(districts), sorted(markets),
+            sorted(commodities) if commodities else sorted({"Onion","Tomato","Potato","Rice","Wheat","Maize","Soybean","Cotton","Groundnut","Chilli"}),
+            sorted(varieties) if varieties else ["Local","Hybrid","FAQ","Bold","Other"],
+            sorted(grades) if grades else ["FAQ","Grade A","Grade B","Common"])
+
+states_opt, districts_opt, markets_opt, commodities_opt, varieties_opt, grades_opt = get_options()
 
 # ══════════════════════════════════════════════════════════════
-# LIVE DATA
+# TABS
 # ══════════════════════════════════════════════════════════════
-def fetch_live_prices(state: str, commodity: str, limit: int = 5) -> list[dict]:
-    try:
-        r = requests.get(DATGOV_URL, params={
-            "api-key": DATGOV_KEY,
-            "format":  "json",
-            "limit":   limit,
-            "filters[state.keyword]":     state,
-            "filters[commodity.keyword]": commodity,
-        }, timeout=8)
-        r.raise_for_status()
-        return r.json().get("records", [])
-    except Exception as e:
-        print(f"[WARN] Live API: {e}")
-        return []
+tab1, tab2, tab3 = st.tabs([tx["tab_predict"], tx["tab_negotiate"], tx["tab_about"]])
 
-def live_records_to_docs(records: list[dict]) -> list[str]:
-    docs = []
-    for r in records:
-        docs.append(
-            f"LIVE — In {r.get('market','?')}, {r.get('district','?')}, "
-            f"{r.get('state','?')}: {r.get('commodity','?')} "
-            f"(Grade {r.get('grade','FAQ')}). "
-            f"Modal Rs.{r.get('modal_price','?')} per quintal. "
-            f"Min Rs.{r.get('min_price','?')}, Max Rs.{r.get('max_price','?')}. "
-            f"Date: {r.get('arrival_date','today')}."
-        )
-    return docs
-
-# ══════════════════════════════════════════════════════════════
-# RETRIEVAL  (local embeddings — free)
-# ══════════════════════════════════════════════════════════════
-def retrieve(
-    query: str,
-    index,
-    docs: list[str],
-    top_k: int = TOP_K,
-    live_docs: list[str] | None = None,
-) -> list[str]:
-    embedder = get_embedder()
-    q_vec = embedder.encode([query], normalize_embeddings=True).astype("float32")
-    _, idxs = index.search(q_vec, top_k)
-    retrieved = [docs[i] for i in idxs[0] if i < len(docs)]
-    if live_docs:
-        retrieved = live_docs + retrieved
-    return retrieved[:top_k + len(live_docs or [])]
-
-# ══════════════════════════════════════════════════════════════
-# PROMPT
-# ══════════════════════════════════════════════════════════════
-SYSTEM_PROMPT = """You are Mandi Mitra, an expert agricultural market advisor for Indian farmers and traders.
-You have access to historical AGMARKNET mandi price data and real-time market prices.
-Respond in the same language the user used (English / Hindi / Kannada).
-Format your response with:
-- **Estimated Price Range**: Rs.X – Rs.Y per quintal
-- **Fair Offer**: Rs.Z (minimum the farmer should accept)
-- **Market Trend**: 1-2 sentences
-- **Negotiation Tip**: One practical tip
-Keep it concise and farmer-friendly."""
-
-def build_prompt(state, district, market, commodity, variety, grade,
-                 offered_price, language, retrieved_docs) -> str:
-    context = "\n".join(f"  • {d}" for d in retrieved_docs)
-    offer_line = (
-        f"\nThe farmer is offering Rs.{offered_price:,} per quintal. Is this fair?"
-        if offered_price else ""
-    )
-    lang_instr = {
-        "English": "Respond in English.",
-        "हिन्दी":  "हिन्दी में जवाब दें।",
-        "ಕನ್ನಡ":  "ಕನ್ನಡದಲ್ಲಿ ಉತ್ತರಿಸಿ.",
-    }.get(language, "Respond in English.")
-
-    return f"""{lang_instr}
-
-## Market Data
-{context}
-
-## Query
-Commodity : {commodity} ({variety}, Grade: {grade})
-Location  : {market}, {district}, {state}
-{offer_line}
-
-Provide price intelligence and negotiation advice based on the data above."""
-
-# ══════════════════════════════════════════════════════════════
-# MAIN RAG QUERY
-# ══════════════════════════════════════════════════════════════
-def rag_query(state, district, market, commodity, variety, grade,
-              offered_price=None, language="English",
-              index=None, docs=None, client=None, stream=True):
-
-    if client is None:
-        client = get_grok_client()
-
-    live_records = fetch_live_prices(state, commodity)
-    live_docs    = live_records_to_docs(live_records)
-
-    query     = f"{commodity} {variety} {grade} price {market} {district} {state}"
-    retrieved = retrieve(query, index, docs or [], live_docs=live_docs)
-
-    prompt   = build_prompt(state, district, market, commodity, variety, grade,
-                            offered_price, language, retrieved)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user",   "content": prompt},
-    ]
-
-    if stream:
-        resp = client.chat.completions.create(
-            model=GROK_MODEL, messages=messages,
-            stream=True, max_tokens=600, temperature=0.3,
-        )
-        def _gen():
-            for chunk in resp:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    yield delta
-        return _gen()
+# ──────────────────────────────────────────────────────────────
+# TAB 1 — PRICE INTELLIGENCE
+# ──────────────────────────────────────────────────────────────
+with tab1:
+    if not index:
+        st.error(tx["no_index"])
+    elif not os.environ.get("XAI_API_KEY"):
+        st.error(tx["no_key"])
     else:
-        resp = client.chat.completions.create(
-            model=GROK_MODEL, messages=messages,
-            stream=False, max_tokens=600, temperature=0.3,
-        )
-        return resp.choices[0].message.content
+        st.markdown('<div class="card card-gold">', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-head">🗺️ {tx["commodity"]} Details</div>', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════
-# OFFER EVALUATION
-# ══════════════════════════════════════════════════════════════
-def evaluate_offer(offered, retrieved_docs, commodity, language, client) -> dict:
-    context = "\n".join(f"• {d}" for d in retrieved_docs[:5])
-    prompt  = f"""Based on these mandi prices for {commodity}:
-{context}
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            state     = st.selectbox(tx["state"],     [""] + states_opt,     key="p_state")
+            commodity = st.selectbox(tx["commodity"], [""] + commodities_opt, key="p_commodity")
+        with col2:
+            district  = st.selectbox(tx["district"],  [""] + districts_opt,  key="p_district")
+            variety   = st.selectbox(tx["variety"],   [""] + varieties_opt,  key="p_variety")
+        with col3:
+            market    = st.selectbox(tx["market"],    [""] + markets_opt,    key="p_market")
+            grade     = st.selectbox(tx["grade"],     [""] + grades_opt,     key="p_grade")
 
-Farmer offers Rs.{offered:,} per quintal.
-Reply ONLY with valid JSON (no markdown, no extra text):
-{{
-  "estimated_fair_price": <integer>,
-  "verdict": "FAIR" | "LOW" | "HIGH",
-  "confidence_pct": <0-100>,
-  "advice": "<one sentence in {language}>"
-}}"""
-    resp = client.chat.completions.create(
-        model=GROK_MODEL,
-        messages=[
-            {"role": "system", "content": "You are a mandi price expert. Return only valid JSON."},
-            {"role": "user",   "content": prompt},
-        ],
-        max_tokens=200, temperature=0.1,
-    )
-    raw = resp.choices[0].message.content.strip().replace("```json","").replace("```","").strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        return {"estimated_fair_price": offered, "verdict": "UNKNOWN",
-                "confidence_pct": 50, "advice": raw}
+        st.markdown("</div>", unsafe_allow_html=True)
 
+        ready = all([state, district, market, commodity, variety, grade])
+
+        if not ready:
+            st.info(f"💡 {tx['select_hint']}")
+        else:
+            if st.button(tx["predict_btn"], key="btn_predict"):
+                with st.spinner(tx["spinner_predict"]):
+                    from rag_engine import rag_query, fetch_live_prices
+
+                    # Check live data
+                    live = fetch_live_prices(state, commodity)
+                    if live:
+                        st.toast(tx["live_badge"], icon="🟢")
+
+                    st.markdown('<div class="card card-gold">', unsafe_allow_html=True)
+                    st.markdown(f'<div class="section-head">🤖 Mandi Mitra Analysis</div>', unsafe_allow_html=True)
+
+                    gen = rag_query(
+                        state, district, market, commodity, variety, grade,
+                        offered_price=None, language=lang,
+                        index=index, docs=docs, client=client, stream=True,
+                    )
+                    st.write_stream(gen)
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                    # Save context for negotiation tab
+                    st.session_state["last_query"] = dict(
+                        state=state, district=district, market=market,
+                        commodity=commodity, variety=variety, grade=grade,
+                    )
+                    st.toast("Analysis complete!", icon="✅")
+
+# ──────────────────────────────────────────────────────────────
+# TAB 2 — NEGOTIATION
+# ──────────────────────────────────────────────────────────────
+with tab2:
+    if not index:
+        st.error(tx["no_index"])
+    elif not os.environ.get("XAI_API_KEY"):
+        st.error(tx["no_key"])
+    else:
+        st.markdown('<div class="card card-blue">', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-head">🤝 {tx["tab_negotiate"]}</div>', unsafe_allow_html=True)
+
+        # If coming from predict tab, prefill
+        last = st.session_state.get("last_query", {})
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            n_state     = st.selectbox(tx["state"],     [""] + states_opt,     index=(states_opt.index(last.get("state",""))+1) if last.get("state","") in states_opt else 0, key="n_state")
+            n_commodity = st.selectbox(tx["commodity"], [""] + commodities_opt, index=(commodities_opt.index(last.get("commodity",""))+1) if last.get("commodity","") in commodities_opt else 0, key="n_commodity")
+        with col2:
+            n_district  = st.selectbox(tx["district"],  [""] + districts_opt,  key="n_district")
+            n_variety   = st.selectbox(tx["variety"],   [""] + varieties_opt,  key="n_variety")
+        with col3:
+            n_market    = st.selectbox(tx["market"],    [""] + markets_opt,    key="n_market")
+            n_grade     = st.selectbox(tx["grade"],     [""] + grades_opt,     key="n_grade")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Offer input
+        st.markdown('<div class="card card-blue">', unsafe_allow_html=True)
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            offered_price = st.number_input(
+                tx["offer_label"], min_value=0, step=50,
+                placeholder=tx["offer_placeholder"], key="offered_price"
+            )
+        with col_b:
+            st.markdown(f'<p style="color:var(--muted);font-size:0.82rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">{tx["voice_label"]}</p>', unsafe_allow_html=True)
+            audio = st.audio_input("🎙️", key="voice_offer", label_visibility="collapsed")
+            if audio:
+                st.info("🎙️ Audio recorded. Transcription requires a speech-to-text service (e.g. Whisper). Enter price manually above.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        n_ready = all([n_state, n_district, n_market, n_commodity, n_variety, n_grade, offered_price])
+
+        if not n_ready:
+            st.info(f"💡 {tx['select_hint']}")
+        else:
+            if st.button(tx["evaluate_btn"], key="btn_evaluate"):
+                with st.spinner(tx["spinner_eval"]):
+                    from rag_engine import evaluate_offer, retrieve, fetch_live_prices, live_records_to_docs
+
+                    live_records = fetch_live_prices(n_state, n_commodity)
+                    live_docs    = live_records_to_docs(live_records)
+                    query        = f"{n_commodity} {n_variety} {n_grade} price {n_market} {n_district} {n_state}"
+                    retrieved    = retrieve(query, index, docs or [], live_docs=live_docs)
+
+                    result = evaluate_offer(
+                        int(offered_price), retrieved, n_commodity, lang, client
+                    )
+
+                    verdict = result.get("verdict", "UNKNOWN")
+                    fair_p  = result.get("estimated_fair_price", 0)
+                    conf    = result.get("confidence_pct", 50)
+                    advice  = result.get("advice", "")
+
+                    # Verdict card
+                    verdict_map = {
+                        "FAIR":    ("card-green", tx["verdict_fair"],  "success"),
+                        "LOW":     ("card-red",   tx["verdict_low"],   "error"),
+                        "HIGH":    ("card-blue",  tx["verdict_high"],  "info"),
+                        "UNKNOWN": ("card-gold",  tx["verdict_unknown"],"warning"),
+                    }
+                    card_cls, verdict_label, alert_type = verdict_map.get(verdict, verdict_map["UNKNOWN"])
+
+                    st.markdown(f'<div class="card {card_cls}">', unsafe_allow_html=True)
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("🏷️ " + tx["fair_price"], f"₹{fair_p:,}")
+                    with col2:
+                        st.metric("💸 Your Offer", f"₹{int(offered_price):,}",
+                                  delta=f"{int(offered_price)-fair_p:+,}")
+                    with col3:
+                        st.metric("📊 " + tx["confidence"], f"{conf}%")
+
+                    st.progress(conf / 100)
+
+                    if alert_type == "success":
+                        st.success(f"**{verdict_label}** — {advice}")
+                    elif alert_type == "error":
+                        st.error(f"**{verdict_label}** — {advice}")
+                    elif alert_type == "info":
+                        st.info(f"**{verdict_label}** — {advice}")
+                    else:
+                        st.warning(f"**{verdict_label}** — {advice}")
+
+                    # Price band expander
+                    with st.expander("📊 Price Band Analysis"):
+                        band_low  = int(fair_p * 0.85)
+                        band_high = int(fair_p * 1.15)
+                        st.markdown(f"""
+| Band | Price (₹/quintal) |
+|------|-------------------|
+| 🔴 Below Fair (reject) | < ₹{band_low:,} |
+| 🟡 Negotiate Zone | ₹{band_low:,} – ₹{fair_p:,} |
+| 🟢 Fair Price | ₹{fair_p:,} |
+| 🔵 Above Market | > ₹{band_high:,} |
+""")
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    st.toast("Evaluation complete!", icon="⚖️")
+
+# ──────────────────────────────────────────────────────────────
+# TAB 3 — ABOUT
+# ──────────────────────────────────────────────────────────────
+with tab3:
+    st.markdown('<div class="card card-gold">', unsafe_allow_html=True)
+    st.markdown(tx["about_text"])
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### 📋 System Status")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("RAG Index", "✅ Loaded" if index else "❌ Missing")
+    with col2:
+        st.metric("Grok API", "✅ Key Set" if os.environ.get("XAI_API_KEY") else "❌ Not Set")
+    with col3:
+        st.metric("Live API", "✅ data.gov.in")
+    st.markdown("</div>", unsafe_allow_html=True)
