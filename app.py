@@ -211,15 +211,4 @@ Reply ONLY with valid JSON (no markdown, no extra text):
     except Exception:
         return {"estimated_fair_price": offered, "verdict": "UNKNOWN",
                 "confidence_pct": 50, "advice": raw}
-@st.cache_resource(show_spinner="Building index on first run…")
-def load_rag():
-    from rag_engine import load_index
-    index, metas, docs = load_index()
-    if index is None:
-        # Auto-build from CSV if pkl missing
-        from sentence_transformers import SentenceTransformer
-        import faiss, pandas as pd
-        df = pd.read_csv("commodity_price (1).csv")
-        df.columns = [c.replace("_x0020_", "_") for c in df.columns]
-        # ... rest of ingest logic
-    return index, metas, docs
+
