@@ -348,10 +348,36 @@ div[data-baseweb="select"] > div {
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
-# SIDEBAR — Language + info
+# SIDEBAR — Profile + Language + info
 # ══════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown('<div class="section-head">🌾 Mandi Mitra</div>', unsafe_allow_html=True)
+    # ── Profile section ──
+    st.markdown("""
+    <div style="background:linear-gradient(135deg,#162952,#0F2040);border:1px solid #1E3A6E;
+                border-radius:16px;padding:1.2rem;margin-bottom:1rem;text-align:center;">
+        <div style="font-size:3rem;margin-bottom:0.4rem;">👨‍🌾</div>
+        <div style="font-family:'Playfair Display',serif;font-size:1.1rem;
+                    color:#F5A623;font-weight:700;">Mandi Mitra User</div>
+        <div style="color:#7A90B8;font-size:0.78rem;margin-top:0.2rem;">Farmer / Trader</div>
+        <div style="display:flex;justify-content:center;gap:1rem;margin-top:0.8rem;">
+            <div style="text-align:center;">
+                <div style="color:#F5A623;font-weight:700;font-size:1rem;">2,733</div>
+                <div style="color:#7A90B8;font-size:0.7rem;">Records</div>
+            </div>
+            <div style="width:1px;background:#1E3A6E;"></div>
+            <div style="text-align:center;">
+                <div style="color:#00C9A7;font-weight:700;font-size:1rem;">Live</div>
+                <div style="color:#7A90B8;font-size:0.7rem;">API</div>
+            </div>
+            <div style="width:1px;background:#1E3A6E;"></div>
+            <div style="text-align:center;">
+                <div style="color:#3498DB;font-weight:700;font-size:1rem;">3</div>
+                <div style="color:#7A90B8;font-size:0.7rem;">Languages</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     st.markdown("---")
     lang = st.radio(
         "Language / भाषा / ಭಾಷೆ",
@@ -381,6 +407,16 @@ st.markdown(f"""
 # ══════════════════════════════════════════════════════════════
 # LOAD INDEX + CLIENT
 # ══════════════════════════════════════════════════════════════
+# Inject secret into env so rag_engine.py can find it via os.environ
+if "XAI_API_KEY" not in os.environ:
+    try:
+        os.environ["XAI_API_KEY"] = st.secrets["XAI_API_KEY"]
+    except Exception:
+        pass
+
+def has_api_key():
+    return bool(os.environ.get("XAI_API_KEY", "").strip())
+
 @st.cache_resource(show_spinner="Loading RAG index…")
 def load_resources():
     from rag_engine import load_index, get_grok_client
@@ -446,8 +482,9 @@ tab1, tab2, tab3 = st.tabs([tx["tab_predict"], tx["tab_negotiate"], tx["tab_abou
 with tab1:
     if not index:
         st.error(tx["no_index"])
-    elif not os.environ.get("XAI_API_KEY"):
+    elif not has_api_key():
         st.error(tx["no_key"])
+        st.markdown("**To fix:** Go to Streamlit Cloud → App Settings → Secrets and add:\n```\nXAI_API_KEY = \"xai-your-key-here\"\n```")
     else:
         st.markdown('<div class="card card-gold">', unsafe_allow_html=True)
         st.markdown(f'<div class="section-head">🗺️ {tx["commodity"]} Details</div>', unsafe_allow_html=True)
@@ -471,31 +508,29 @@ with tab1:
             st.info(f"💡 {tx['select_hint']}")
         else:
             if st.button(tx["predict_btn"], key="btn_predict"):
+                from rag_engine import rag_query, fetch_live_prices
+                live = fetch_live_prices(state, commodity)
+                if live:
+                    st.toast(tx["live_badge"], icon="🟢")
                 with st.spinner(tx["spinner_predict"]):
-                    from rag_engine import rag_query, fetch_live_prices
-
-                    # Check live data
-                    live = fetch_live_prices(state, commodity)
-                    if live:
-                        st.toast(tx["live_badge"], icon="🟢")
-
-                    st.markdown('<div class="card card-gold">', unsafe_allow_html=True)
-                    st.markdown(f'<div class="section-head">🤖 Mandi Mitra Analysis</div>', unsafe_allow_html=True)
-
-                    gen = rag_query(
+                    result_text = rag_query(
                         state, district, market, commodity, variety, grade,
                         offered_price=None, language=lang,
-                        index=index, docs=docs, client=client, stream=True,
+                        index=index, docs=docs, client=client, stream=False,
                     )
-                    st.write_stream(gen)
-                    st.markdown("</div>", unsafe_allow_html=True)
+                st.session_state["predict_result"] = result_text
+                st.session_state["last_query"] = dict(
+                    state=state, district=district, market=market,
+                    commodity=commodity, variety=variety, grade=grade,
+                )
+                st.toast("Analysis complete!", icon="✅")
 
-                    # Save context for negotiation tab
-                    st.session_state["last_query"] = dict(
-                        state=state, district=district, market=market,
-                        commodity=commodity, variety=variety, grade=grade,
-                    )
-                    st.toast("Analysis complete!", icon="✅")
+        # Result rendered outside button block — no blank space
+        if st.session_state.get("predict_result"):
+            st.markdown('<div class="card card-gold">', unsafe_allow_html=True)
+            st.markdown(f'<div class="section-head">🤖 Mandi Mitra Analysis</div>', unsafe_allow_html=True)
+            st.markdown(st.session_state["predict_result"])
+            st.markdown("</div>", unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────────────
 # TAB 2 — NEGOTIATION
@@ -503,13 +538,13 @@ with tab1:
 with tab2:
     if not index:
         st.error(tx["no_index"])
-    elif not os.environ.get("XAI_API_KEY"):
+    elif not has_api_key():
         st.error(tx["no_key"])
+        st.markdown("**To fix:** Go to Streamlit Cloud → App Settings → Secrets and add:\n```\nXAI_API_KEY = \"xai-your-key-here\"\n```")
     else:
         st.markdown('<div class="card card-blue">', unsafe_allow_html=True)
         st.markdown(f'<div class="section-head">🤝 {tx["tab_negotiate"]}</div>', unsafe_allow_html=True)
 
-        # If coming from predict tab, prefill
         last = st.session_state.get("last_query", {})
 
         col1, col2, col3 = st.columns(3)
@@ -540,7 +575,7 @@ with tab2:
                 st.info("🎙️ Audio recorded. Transcription requires a speech-to-text service (e.g. Whisper). Enter price manually above.")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        n_ready = all([n_state, n_district, n_market, n_commodity, n_variety, n_grade, offered_price])
+        n_ready = all([n_state, n_district, n_market, n_commodity, n_variety, n_grade]) and offered_price > 0
 
         if not n_ready:
             st.info(f"💡 {tx['select_hint']}")
@@ -623,7 +658,7 @@ with tab3:
     with col1:
         st.metric("RAG Index", "✅ Loaded" if index else "❌ Missing")
     with col2:
-        st.metric("Grok API", "✅ Key Set" if os.environ.get("XAI_API_KEY") else "❌ Not Set")
+        st.metric("Grok API", "✅ Key Set" if has_api_key() else "❌ Not Set")
     with col3:
         st.metric("Live API", "✅ data.gov.in")
     st.markdown("</div>", unsafe_allow_html=True)
