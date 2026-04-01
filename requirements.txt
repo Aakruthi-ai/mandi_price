@@ -1,6 +1,6 @@
 streamlit
 openai
+matplotlib
 faiss-cpu
 sentence-transformers
-matplotlib
 numpy
