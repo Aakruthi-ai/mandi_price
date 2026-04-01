@@ -2,53 +2,159 @@ import streamlit as st
 import os
 from rag_engine import rag_query, speech_to_text, generate_price_trend, get_client
 
-st.set_page_config(page_title="Mandi Mitra", layout="wide")
+st.set_page_config(page_title="Mandi Mitra 🌾", layout="wide")
 
-# ---------- API KEY ----------
-if "OPENAI_API_KEY" not in os.environ:
-    try:
-        os.environ["OPENAI_API_KEY"] = st.secrets["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"]
-    except:
-        pass
 
-# ---------- SIDEBAR ----------
+
+# ---------------- LANGUAGE DICTIONARY ----------------
+T = {
+    "English": {
+        "title": "Mandi Mitra",
+        "tab1": "📈 Price Intelligence",
+        "tab2": "🤝 Negotiation",
+        "tab3": "ℹ️ About",
+        "state": "State",
+        "district": "District",
+        "market": "Market",
+        "commodity": "Commodity",
+        "variety": "Variety",
+        "grade": "Grade",
+        "btn": "Get Insight",
+        "offer": "Enter Offered Price",
+        "about": "Mandi Mitra helps farmers with AI-based price insights using real-time and historical mandi data."
+    },
+    "हिन्दी": {
+        "title": "मंडी मित्र",
+        "tab1": "📈 मूल्य जानकारी",
+        "tab2": "🤝 मोलभाव",
+        "tab3": "ℹ️ जानकारी",
+        "state": "राज्य",
+        "district": "जिला",
+        "market": "मंडी",
+        "commodity": "फसल",
+        "variety": "किस्म",
+        "grade": "ग्रेड",
+        "btn": "मूल्य देखें",
+        "offer": "अपना प्रस्तावित मूल्य दर्ज करें",
+        "about": "मंडी मित्र किसानों को AI आधारित मूल्य सुझाव देता है।"
+    },
+    "ಕನ್ನಡ": {
+        "title": "ಮಂಡಿ ಮಿತ್ರ",
+        "tab1": "📈 ಬೆಲೆ ಮಾಹಿತಿ",
+        "tab2": "🤝 ಚರ್ಚೆ",
+        "tab3": "ℹ️ ಮಾಹಿತಿ",
+        "state": "ರಾಜ್ಯ",
+        "district": "ಜಿಲ್ಲೆ",
+        "market": "ಮಾರುಕಟ್ಟೆ",
+        "commodity": "ಬೆಳೆ",
+        "variety": "ತಳಿ",
+        "grade": "ದರ್ಜೆ",
+        "btn": "ಬೆಲೆ ನೋಡಿ",
+        "offer": "ನಿಮ್ಮ ಬೆಲೆ ನಮೂದಿಸಿ",
+        "about": "ಮಂಡಿ ಮಿತ್ರ ರೈತರಿಗೆ AI ಮೂಲಕ ಬೆಲೆ ಸಲಹೆ ನೀಡುತ್ತದೆ."
+    }
+}
+
+# ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.title("👤 Profile")
+    st.markdown("## 👤 User Profile")
     name = st.text_input("Name", "Farmer")
+    role = st.selectbox("Role", ["Farmer", "Trader"])
+
     lang = st.radio("Language", ["English", "हिन्दी", "ಕನ್ನಡ"])
+    tx = T[lang]
 
-# ---------- MAIN ----------
-st.title("🌾 Mandi Mitra")
+# ---------------- STYLE ----------------
+st.markdown("""
+<style>
+body {background-color: #FDF6E3;}
+.stApp {background: linear-gradient(135deg,#FFF3E0,#E8F5E9);}
+h1, h2, h3 {color: #FF9933;}
+</style>
+""", unsafe_allow_html=True)
 
-state = st.text_input("State")
-district = st.text_input("District")
-market = st.text_input("Market")
-commodity = st.text_input("Commodity")
-variety = st.text_input("Variety")
-grade = st.text_input("Grade")
+# ---------------- TITLE ----------------
+st.title(f"🌾 {tx['title']}")
 
-# ---------- VOICE ----------
-audio = st.audio_input("🎙 Speak commodity/price")
+# ---------------- DROPDOWNS ----------------
+states = ["Karnataka","Maharashtra","Punjab","UP"]
+districts = ["Bangalore","Mumbai","Lucknow"]
+markets = ["Yeshwanthpur","Vashi","Azadpur"]
+commodities = ["Onion","Tomato","Rice","Wheat"]
+varieties = ["Local","Hybrid","FAQ"]
+grades = ["A","B","FAQ"]
 
-voice_text = ""
-if audio:
-    with open("temp.wav", "wb") as f:
-        f.write(audio.read())
+# ---------------- TABS ----------------
+tab1, tab2, tab3 = st.tabs([tx["tab1"], tx["tab2"], tx["tab3"]])
 
-    client = get_client()
-    voice_text = speech_to_text("temp.wav", client)
-    st.success(f"Recognized: {voice_text}")
+# =========================================================
+# 📈 TAB 1: PRICE INTELLIGENCE
+# =========================================================
+with tab1:
+    col1, col2, col3 = st.columns(3)
 
-# ---------- BUTTON ----------
-if st.button("Get Price Insight"):
-    result, docs = rag_query(
-        state, district, market, commodity, variety, grade, lang
-    )
+    with col1:
+        state = st.selectbox(tx["state"], states)
+        commodity = st.selectbox(tx["commodity"], commodities)
 
-    st.subheader("📊 AI Insight")
-    st.write(result)
+    with col2:
+        district = st.selectbox(tx["district"], districts)
+        variety = st.selectbox(tx["variety"], varieties)
 
-    # ---------- GRAPH ----------
-    fig = generate_price_trend(docs)
-    if fig:
-        st.pyplot(fig)
+    with col3:
+        market = st.selectbox(tx["market"], markets)
+        grade = st.selectbox(tx["grade"], grades)
+
+    if st.button(tx["btn"]):
+        result, docs = rag_query(state, district, market, commodity, variety, grade, lang)
+
+        st.subheader("📊 Result")
+        st.write(result)
+
+        fig = generate_price_trend(docs)
+        if fig:
+            st.pyplot(fig)
+
+# =========================================================
+# 🤝 TAB 2: NEGOTIATION
+# =========================================================
+with tab2:
+    st.subheader(tx["offer"])
+
+    offer_price = st.number_input("₹", step=50)
+
+    audio = st.audio_input("🎙 Speak your price")
+
+    if audio:
+        with open("temp.wav", "wb") as f:
+            f.write(audio.read())
+
+        client = get_client()
+        text = speech_to_text("temp.wav", client)
+
+        st.success(f"Recognized: {text}")
+
+    if st.button("Evaluate Deal"):
+        result, _ = rag_query("Karnataka","Bangalore","Yeshwanthpur","Onion","Local","FAQ", lang)
+        st.write(result)
+
+# =========================================================
+# ℹ️ TAB 3: ABOUT
+# =========================================================
+with tab3:
+    st.markdown(f"""
+    ### 🌾 {tx['title']}
+
+    {tx["about"]}
+
+    #### 🚀 Features:
+    - AI Price Prediction
+    - Voice Input (Hindi/Kannada)
+    - Smart Negotiation
+    - Live Market Trends
+
+    #### 🧠 Tech Stack:
+    - Streamlit
+    - OpenAI
+    - FAISS
+    """)
